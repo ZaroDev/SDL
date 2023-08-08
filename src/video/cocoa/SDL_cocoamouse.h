@@ -1,6 +1,6 @@
 /*
   Simple DirectMedia Layer
-  Copyright (C) 1997-2023 Sam Lantinga <slouken@libsdl.org>
+  Copyright (C) 1997-2018 Sam Lantinga <slouken@libsdl.org>
 
   This software is provided 'as-is', without any express or implied
   warranty.  In no event will the authors be held liable for any damages
@@ -25,14 +25,14 @@
 
 #include "SDL_cocoavideo.h"
 
-extern int Cocoa_InitMouse(_THIS);
+extern void Cocoa_InitMouse(_THIS);
 extern void Cocoa_HandleMouseEvent(_THIS, NSEvent * event);
 extern void Cocoa_HandleMouseWheel(SDL_Window *window, NSEvent * event);
 extern void Cocoa_HandleMouseWarp(CGFloat x, CGFloat y);
 extern void Cocoa_QuitMouse(_THIS);
 
 typedef struct {
-    /* Whether we've seen a cursor warp since the last move event. */
+    /* Wether we've seen a cursor warp since the last move event. */
     SDL_bool seenWarp;
     /* What location our last cursor warp was to. */
     CGFloat lastWarpX;
@@ -40,8 +40,7 @@ typedef struct {
     /* What location we last saw the cursor move to. */
     CGFloat lastMoveX;
     CGFloat lastMoveY;
-    /* If we just turned on relative mode, and should skip a single mouse motion event. */
-    SDL_bool justEnabledRelative;
+    void *tapdata;
 } SDL_MouseData;
 
 @interface NSCursor (InvisibleCursor)

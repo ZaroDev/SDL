@@ -1,6 +1,6 @@
 /*
   Simple DirectMedia Layer
-  Copyright (C) 1997-2023 Sam Lantinga <slouken@libsdl.org>
+  Copyright (C) 1997-2018 Sam Lantinga <slouken@libsdl.org>
 
   This software is provided 'as-is', without any express or implied
   warranty.  In no event will the authors be held liable for any damages
@@ -20,7 +20,7 @@
 */
 #include "../../SDL_internal.h"
 
-#ifdef SDL_TIMER_PSP
+#ifdef SDL_TIMERS_PSP
 
 #include "SDL_thread.h"
 #include "SDL_timer.h"
@@ -34,7 +34,8 @@
 static struct timeval start;
 static SDL_bool ticks_started = SDL_FALSE;
 
-void SDL_TicksInit(void)
+void
+SDL_TicksInit(void)
 {
     if (ticks_started) {
         return;
@@ -44,29 +45,34 @@ void SDL_TicksInit(void)
     gettimeofday(&start, NULL);
 }
 
-void SDL_TicksQuit(void)
+void
+SDL_TicksQuit(void)
 {
     ticks_started = SDL_FALSE;
 }
 
-Uint64 SDL_GetTicks64(void)
+Uint32 SDL_GetTicks(void)
 {
-    struct timeval now;
-
     if (!ticks_started) {
         SDL_TicksInit();
     }
 
+    struct timeval now;
+    Uint32 ticks;
+
     gettimeofday(&now, NULL);
-    return (Uint64)(((Sint64)(now.tv_sec - start.tv_sec) * 1000) + ((now.tv_usec - start.tv_usec) / 1000));
+    ticks=(now.tv_sec-start.tv_sec)*1000+(now.tv_usec-start.tv_usec)/1000;
+    return(ticks);
 }
 
-Uint64 SDL_GetPerformanceCounter(void)
+Uint64
+SDL_GetPerformanceCounter(void)
 {
-    return SDL_GetTicks64();
+    return SDL_GetTicks();
 }
 
-Uint64 SDL_GetPerformanceFrequency(void)
+Uint64
+SDL_GetPerformanceFrequency(void)
 {
     return 1000;
 }
@@ -74,13 +80,12 @@ Uint64 SDL_GetPerformanceFrequency(void)
 void SDL_Delay(Uint32 ms)
 {
     const Uint32 max_delay = 0xffffffffUL / 1000;
-    if (ms > max_delay) {
+    if(ms > max_delay)
         ms = max_delay;
-    }
     sceKernelDelayThreadCB(ms * 1000);
 }
 
-#endif /* SDL_TIMER_PSP */
+#endif /* SDL_TIMERS_PSP */
 
 /* vim: ts=4 sw=4
  */

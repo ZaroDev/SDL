@@ -1,6 +1,6 @@
 /*
   Simple DirectMedia Layer
-  Copyright (C) 1997-2023 Sam Lantinga <slouken@libsdl.org>
+  Copyright (C) 1997-2018 Sam Lantinga <slouken@libsdl.org>
 
   This software is provided 'as-is', without any express or implied
   warranty.  In no event will the authors be held liable for any damages
@@ -24,40 +24,30 @@
 
 /* Allow access to a raw mixing buffer */
 
+#include "SDL_assert.h"
 #include "SDL_timer.h"
 #include "SDL_loadso.h"
 #include "SDL_audio.h"
 #include "../SDL_audio_c.h"
 #include "SDL_directsound.h"
-#include <mmreg.h>
-#if HAVE_MMDEVICEAPI_H
-#include "../../core/windows/SDL_immdevice.h"
-#endif /* HAVE_MMDEVICEAPI_H */
 
 #ifndef WAVE_FORMAT_IEEE_FLOAT
 #define WAVE_FORMAT_IEEE_FLOAT 0x0003
 #endif
 
-/* For Vista+, we can enumerate DSound devices with IMMDevice */
-#if HAVE_MMDEVICEAPI_H
-static SDL_bool SupportsIMMDevice = SDL_FALSE;
-#endif /* HAVE_MMDEVICEAPI_H */
-
 /* DirectX function pointers for audio */
-static void *DSoundDLL = NULL;
-typedef HRESULT(WINAPI *fnDirectSoundCreate8)(LPGUID, LPDIRECTSOUND *, LPUNKNOWN);
-typedef HRESULT(WINAPI *fnDirectSoundEnumerateW)(LPDSENUMCALLBACKW, LPVOID);
-typedef HRESULT(WINAPI *fnDirectSoundCaptureCreate8)(LPCGUID, LPDIRECTSOUNDCAPTURE8 *, LPUNKNOWN);
-typedef HRESULT(WINAPI *fnDirectSoundCaptureEnumerateW)(LPDSENUMCALLBACKW, LPVOID);
+static void* DSoundDLL = NULL;
+typedef HRESULT (WINAPI *fnDirectSoundCreate8)(LPGUID,LPDIRECTSOUND*,LPUNKNOWN);
+typedef HRESULT (WINAPI *fnDirectSoundEnumerateW)(LPDSENUMCALLBACKW, LPVOID);
+typedef HRESULT (WINAPI *fnDirectSoundCaptureCreate8)(LPCGUID,LPDIRECTSOUNDCAPTURE8 *,LPUNKNOWN);
+typedef HRESULT (WINAPI *fnDirectSoundCaptureEnumerateW)(LPDSENUMCALLBACKW,LPVOID);
 static fnDirectSoundCreate8 pDirectSoundCreate8 = NULL;
 static fnDirectSoundEnumerateW pDirectSoundEnumerateW = NULL;
 static fnDirectSoundCaptureCreate8 pDirectSoundCaptureCreate8 = NULL;
 static fnDirectSoundCaptureEnumerateW pDirectSoundCaptureEnumerateW = NULL;
 
-static const GUID SDL_KSDATAFORMAT_SUBTYPE_PCM = { 0x00000001, 0x0000, 0x0010, { 0x80, 0x00, 0x00, 0xaa, 0x00, 0x38, 0x9b, 0x71 } };
-static const GUID SDL_KSDATAFORMAT_SUBTYPE_IEEE_FLOAT = { 0x00000003, 0x0000, 0x0010, { 0x80, 0x00, 0x00, 0xaa, 0x00, 0x38, 0x9b, 0x71 } };
-
-static void DSOUND_Unload(void)
+static void
+DSOUND_Unload(void)
 {
     pDirectSoundCreate8 = NULL;
     pDirectSoundEnumerateW = NULL;
@@ -70,7 +60,9 @@ static void DSOUND_Unload(void)
     }
 }
 
-static int DSOUND_Load(void)
+
+static int
+DSOUND_Load(void)
 {
     int loaded = 0;
 
@@ -80,19 +72,17 @@ static int DSOUND_Load(void)
     if (DSoundDLL == NULL) {
         SDL_SetError("DirectSound: failed to load DSOUND.DLL");
     } else {
-/* Now make sure we have DirectX 8 or better... */
-#define DSOUNDLOAD(f)                                  \
-    {                                                  \
-        p##f = (fn##f)SDL_LoadFunction(DSoundDLL, #f); \
-        if (!p##f)                                     \
-            loaded = 0;                                \
-    }
-        loaded = 1; /* will reset if necessary. */
+        /* Now make sure we have DirectX 8 or better... */
+        #define DSOUNDLOAD(f) { \
+            p##f = (fn##f) SDL_LoadFunction(DSoundDLL, #f); \
+            if (!p##f) loaded = 0; \
+        }
+        loaded = 1;  /* will reset if necessary. */
         DSOUNDLOAD(DirectSoundCreate8);
         DSOUNDLOAD(DirectSoundEnumerateW);
         DSOUNDLOAD(DirectSoundCaptureCreate8);
         DSOUNDLOAD(DirectSoundCaptureEnumerateW);
-#undef DSOUNDLOAD
+        #undef DSOUNDLOAD
 
         if (!loaded) {
             SDL_SetError("DirectSound: System doesn't appear to have DX8.");
@@ -106,10 +96,13 @@ static int DSOUND_Load(void)
     return loaded;
 }
 
-static int SetDSerror(const char *function, int code)
+static int
+SetDSerror(const char *function, int code)
 {
-    const char *error;
+    static const char *error;
+    static char errbuf[1024];
 
+    errbuf[0] = 0;
     switch (code) {
     case E_NOINTERFACE:
         error = "Unsupported interface -- Is DirectX 8.0 or later installed?";
@@ -145,63 +138,49 @@ static int SetDSerror(const char *function, int code)
         error = "Function not supported";
         break;
     default:
-        error = "Unknown DirectSound error";
+        SDL_snprintf(errbuf, SDL_arraysize(errbuf),
+                     "%s: Unknown DirectSound error: 0x%x", function, code);
         break;
     }
-
-    return SDL_SetError("%s: %s (0x%x)", function, error, code);
+    if (!errbuf[0]) {
+        SDL_snprintf(errbuf, SDL_arraysize(errbuf), "%s: %s", function,
+                     error);
+    }
+    return SDL_SetError("%s", errbuf);
 }
 
-static void DSOUND_FreeDeviceHandle(void *handle)
+static void
+DSOUND_FreeDeviceHandle(void *handle)
 {
     SDL_free(handle);
 }
 
-static int DSOUND_GetDefaultAudioInfo(char **name, SDL_AudioSpec *spec, int iscapture)
+static BOOL CALLBACK
+FindAllDevs(LPGUID guid, LPCWSTR desc, LPCWSTR module, LPVOID data)
 {
-#if HAVE_MMDEVICEAPI_H
-    if (SupportsIMMDevice) {
-        return SDL_IMMDevice_GetDefaultAudioInfo(name, spec, iscapture);
-    }
-#endif /* HAVE_MMDEVICEAPI_H */
-    return SDL_Unsupported();
-}
-
-static BOOL CALLBACK FindAllDevs(LPGUID guid, LPCWSTR desc, LPCWSTR module, LPVOID data)
-{
-    const int iscapture = (int)((size_t)data);
-    if (guid != NULL) { /* skip default device */
+    const int iscapture = (int) ((size_t) data);
+    if (guid != NULL) {  /* skip default device */
         char *str = WIN_LookupAudioDeviceName(desc, guid);
         if (str != NULL) {
-            LPGUID cpyguid = (LPGUID)SDL_malloc(sizeof(GUID));
-            SDL_memcpy(cpyguid, guid, sizeof(GUID));
-
-            /* Note that spec is NULL, because we are required to connect to the
-             * device before getting the channel mask and output format, making
-             * this information inaccessible at enumeration time
-             */
-            SDL_AddAudioDevice(iscapture, str, NULL, cpyguid);
-            SDL_free(str); /* addfn() makes a copy of this string. */
+            LPGUID cpyguid = (LPGUID) SDL_malloc(sizeof (GUID));
+            SDL_memcpy(cpyguid, guid, sizeof (GUID));
+            SDL_AddAudioDevice(iscapture, str, cpyguid);
+            SDL_free(str);  /* addfn() makes a copy of this string. */
         }
     }
-    return TRUE; /* keep enumerating. */
+    return TRUE;  /* keep enumerating. */
 }
 
-static void DSOUND_DetectDevices(void)
+static void
+DSOUND_DetectDevices(void)
 {
-#if HAVE_MMDEVICEAPI_H
-    if (SupportsIMMDevice) {
-        SDL_IMMDevice_EnumerateEndpoints(SDL_TRUE);
-    } else {
-#endif /* HAVE_MMDEVICEAPI_H */
-        pDirectSoundCaptureEnumerateW(FindAllDevs, (void *)((size_t)1));
-        pDirectSoundEnumerateW(FindAllDevs, (void *)((size_t)0));
-#if HAVE_MMDEVICEAPI_H
-    }
-#endif /* HAVE_MMDEVICEAPI_H*/
+    pDirectSoundCaptureEnumerateW(FindAllDevs, (void *) ((size_t) 1));
+    pDirectSoundEnumerateW(FindAllDevs, (void *) ((size_t) 0));
 }
 
-static void DSOUND_WaitDevice(_THIS)
+
+static void
+DSOUND_WaitDevice(_THIS)
 {
     DWORD status = 0;
     DWORD cursor = 0;
@@ -229,10 +208,10 @@ static void DSOUND_WaitDevice(_THIS)
 
         /* Try to restore a lost sound buffer */
         IDirectSoundBuffer_GetStatus(this->hidden->mixbuf, &status);
-        if (status & DSBSTATUS_BUFFERLOST) {
+        if ((status & DSBSTATUS_BUFFERLOST)) {
             IDirectSoundBuffer_Restore(this->hidden->mixbuf);
             IDirectSoundBuffer_GetStatus(this->hidden->mixbuf, &status);
-            if (status & DSBSTATUS_BUFFERLOST) {
+            if ((status & DSBSTATUS_BUFFERLOST)) {
                 break;
             }
         }
@@ -258,7 +237,8 @@ static void DSOUND_WaitDevice(_THIS)
     }
 }
 
-static void DSOUND_PlayDevice(_THIS)
+static void
+DSOUND_PlayDevice(_THIS)
 {
     /* Unlock the buffer, allowing it to play */
     if (this->hidden->locked_buf) {
@@ -268,7 +248,8 @@ static void DSOUND_PlayDevice(_THIS)
     }
 }
 
-static Uint8 *DSOUND_GetDeviceBuf(_THIS)
+static Uint8 *
+DSOUND_GetDeviceBuf(_THIS)
 {
     DWORD cursor = 0;
     DWORD junk = 0;
@@ -286,7 +267,7 @@ static Uint8 *DSOUND_GetDeviceBuf(_THIS)
     }
     if (result != DS_OK) {
         SetDSerror("DirectSound GetCurrentPosition", result);
-        return NULL;
+        return (NULL);
     }
     cursor /= this->spec.size;
 #ifdef DEBUG_SOUND
@@ -309,23 +290,25 @@ static Uint8 *DSOUND_GetDeviceBuf(_THIS)
     /* Lock the audio buffer */
     result = IDirectSoundBuffer_Lock(this->hidden->mixbuf, cursor,
                                      this->spec.size,
-                                     (LPVOID *)&this->hidden->locked_buf,
+                                     (LPVOID *) & this->hidden->locked_buf,
                                      &rawlen, NULL, &junk, 0);
     if (result == DSERR_BUFFERLOST) {
         IDirectSoundBuffer_Restore(this->hidden->mixbuf);
         result = IDirectSoundBuffer_Lock(this->hidden->mixbuf, cursor,
                                          this->spec.size,
-                                         (LPVOID *)&this->hidden->locked_buf, &rawlen, NULL,
+                                         (LPVOID *) & this->
+                                         hidden->locked_buf, &rawlen, NULL,
                                          &junk, 0);
     }
     if (result != DS_OK) {
         SetDSerror("DirectSound Lock", result);
-        return NULL;
+        return (NULL);
     }
-    return this->hidden->locked_buf;
+    return (this->hidden->locked_buf);
 }
 
-static int DSOUND_CaptureFromDevice(_THIS, void *buffer, int buflen)
+static int
+DSOUND_CaptureFromDevice(_THIS, void *buffer, int buflen)
 {
     struct SDL_PrivateAudioData *h = this->hidden;
     DWORD junk, cursor, ptr1len, ptr2len;
@@ -334,7 +317,7 @@ static int DSOUND_CaptureFromDevice(_THIS, void *buffer, int buflen)
     SDL_assert(buflen == this->spec.size);
 
     while (SDL_TRUE) {
-        if (SDL_AtomicGet(&this->shutdown)) { /* in case the buffer froze... */
+        if (SDL_AtomicGet(&this->shutdown)) {  /* in case the buffer froze... */
             SDL_memset(buffer, this->spec.silence, buflen);
             return buflen;
         }
@@ -343,7 +326,7 @@ static int DSOUND_CaptureFromDevice(_THIS, void *buffer, int buflen)
             return -1;
         }
         if ((cursor / this->spec.size) == h->lastchunk) {
-            SDL_Delay(1); /* FIXME: find out how much time is left and sleep that long */
+            SDL_Delay(1);  /* FIXME: find out how much time is left and sleep that long */
         } else {
             break;
         }
@@ -368,7 +351,8 @@ static int DSOUND_CaptureFromDevice(_THIS, void *buffer, int buflen)
     return ptr1len;
 }
 
-static void DSOUND_FlushCapture(_THIS)
+static void
+DSOUND_FlushCapture(_THIS)
 {
     struct SDL_PrivateAudioData *h = this->hidden;
     DWORD junk, cursor;
@@ -377,7 +361,8 @@ static void DSOUND_FlushCapture(_THIS)
     }
 }
 
-static void DSOUND_CloseDevice(_THIS)
+static void
+DSOUND_CloseDevice(_THIS)
 {
     if (this->hidden->mixbuf != NULL) {
         IDirectSoundBuffer_Stop(this->hidden->mixbuf);
@@ -400,7 +385,8 @@ static void DSOUND_CloseDevice(_THIS)
    number of audio chunks available in the created buffer. This is for
    playback devices, not capture.
 */
-static int CreateSecondary(_THIS, const DWORD bufsize, WAVEFORMATEX *wfmt)
+static int
+CreateSecondary(_THIS, const DWORD bufsize, WAVEFORMATEX *wfmt)
 {
     LPDIRECTSOUND sndObj = this->hidden->sound;
     LPDIRECTSOUNDBUFFER *sndbuf = &this->hidden->mixbuf;
@@ -424,14 +410,14 @@ static int CreateSecondary(_THIS, const DWORD bufsize, WAVEFORMATEX *wfmt)
 
     /* Silence the initial audio buffer */
     result = IDirectSoundBuffer_Lock(*sndbuf, 0, format.dwBufferBytes,
-                                     (LPVOID *)&pvAudioPtr1, &dwAudioBytes1,
-                                     (LPVOID *)&pvAudioPtr2, &dwAudioBytes2,
+                                     (LPVOID *) & pvAudioPtr1, &dwAudioBytes1,
+                                     (LPVOID *) & pvAudioPtr2, &dwAudioBytes2,
                                      DSBLOCK_ENTIREBUFFER);
     if (result == DS_OK) {
         SDL_memset(pvAudioPtr1, this->spec.silence, dwAudioBytes1);
         IDirectSoundBuffer_Unlock(*sndbuf,
-                                  (LPVOID)pvAudioPtr1, dwAudioBytes1,
-                                  (LPVOID)pvAudioPtr2, dwAudioBytes2);
+                                  (LPVOID) pvAudioPtr1, dwAudioBytes1,
+                                  (LPVOID) pvAudioPtr2, dwAudioBytes2);
     }
 
     /* We're ready to go */
@@ -442,7 +428,8 @@ static int CreateSecondary(_THIS, const DWORD bufsize, WAVEFORMATEX *wfmt)
    number of audio chunks available in the created buffer. This is for
    capture devices, not playback.
 */
-static int CreateCaptureBuffer(_THIS, const DWORD bufsize, WAVEFORMATEX *wfmt)
+static int
+CreateCaptureBuffer(_THIS, const DWORD bufsize, WAVEFORMATEX *wfmt)
 {
     LPDIRECTSOUNDCAPTURE capture = this->hidden->capture;
     LPDIRECTSOUNDCAPTUREBUFFER *capturebuf = &this->hidden->capturebuf;
@@ -450,7 +437,7 @@ static int CreateCaptureBuffer(_THIS, const DWORD bufsize, WAVEFORMATEX *wfmt)
     HRESULT result;
 
     SDL_zero(format);
-    format.dwSize = sizeof(format);
+    format.dwSize = sizeof (format);
     format.dwFlags = DSCBCAPS_WAVEMAPPED;
     format.dwBufferBytes = bufsize;
     format.lpwfxFormat = wfmt;
@@ -481,18 +468,20 @@ static int CreateCaptureBuffer(_THIS, const DWORD bufsize, WAVEFORMATEX *wfmt)
     return 0;
 }
 
-static int DSOUND_OpenDevice(_THIS, const char *devname)
+static int
+DSOUND_OpenDevice(_THIS, void *handle, const char *devname, int iscapture)
 {
     const DWORD numchunks = 8;
     HRESULT result;
+    SDL_bool valid_format = SDL_FALSE;
     SDL_bool tried_format = SDL_FALSE;
-    SDL_bool iscapture = this->iscapture;
-    SDL_AudioFormat test_format;
-    LPGUID guid = (LPGUID)this->handle;
+    SDL_AudioFormat test_format = SDL_FirstAudioFormat(this->spec.format);
+    LPGUID guid = (LPGUID) handle;
     DWORD bufsize;
 
     /* Initialize all variables that we clean on shutdown */
-    this->hidden = (struct SDL_PrivateAudioData *)SDL_malloc(sizeof(*this->hidden));
+    this->hidden = (struct SDL_PrivateAudioData *)
+        SDL_malloc((sizeof *this->hidden));
     if (this->hidden == NULL) {
         return SDL_OutOfMemory();
     }
@@ -517,7 +506,7 @@ static int DSOUND_OpenDevice(_THIS, const char *devname)
         }
     }
 
-    for (test_format = SDL_FirstAudioFormat(this->spec.format); test_format; test_format = SDL_NextAudioFormat()) {
+    while ((!valid_format) && (test_format)) {
         switch (test_format) {
         case AUDIO_U8:
         case AUDIO_S16:
@@ -533,103 +522,61 @@ static int DSOUND_OpenDevice(_THIS, const char *devname)
             bufsize = numchunks * this->spec.size;
             if ((bufsize < DSBSIZE_MIN) || (bufsize > DSBSIZE_MAX)) {
                 SDL_SetError("Sound buffer size must be between %d and %d",
-                             (int)((DSBSIZE_MIN < numchunks) ? 1 : DSBSIZE_MIN / numchunks),
-                             (int)(DSBSIZE_MAX / numchunks));
+                             (int) ((DSBSIZE_MIN < numchunks) ? 1 : DSBSIZE_MIN / numchunks),
+                             (int) (DSBSIZE_MAX / numchunks));
             } else {
                 int rc;
-                WAVEFORMATEXTENSIBLE wfmt;
+                WAVEFORMATEX wfmt;
                 SDL_zero(wfmt);
-                if (this->spec.channels > 2) {
-                    wfmt.Format.wFormatTag = WAVE_FORMAT_EXTENSIBLE;
-                    wfmt.Format.cbSize = sizeof(wfmt) - sizeof(WAVEFORMATEX);
-
-                    if (SDL_AUDIO_ISFLOAT(this->spec.format)) {
-                        SDL_memcpy(&wfmt.SubFormat, &SDL_KSDATAFORMAT_SUBTYPE_IEEE_FLOAT, sizeof(GUID));
-                    } else {
-                        SDL_memcpy(&wfmt.SubFormat, &SDL_KSDATAFORMAT_SUBTYPE_PCM, sizeof(GUID));
-                    }
-                    wfmt.Samples.wValidBitsPerSample = SDL_AUDIO_BITSIZE(this->spec.format);
-
-                    switch (this->spec.channels) {
-                    case 3: /* 3.0 (or 2.1) */
-                        wfmt.dwChannelMask = SPEAKER_FRONT_LEFT | SPEAKER_FRONT_RIGHT | SPEAKER_FRONT_CENTER;
-                        break;
-                    case 4: /* 4.0 */
-                        wfmt.dwChannelMask = SPEAKER_FRONT_LEFT | SPEAKER_FRONT_RIGHT | SPEAKER_BACK_LEFT | SPEAKER_BACK_RIGHT;
-                        break;
-                    case 5: /* 5.0 (or 4.1) */
-                        wfmt.dwChannelMask = SPEAKER_FRONT_LEFT | SPEAKER_FRONT_RIGHT | SPEAKER_FRONT_CENTER | SPEAKER_BACK_LEFT | SPEAKER_BACK_RIGHT;
-                        break;
-                    case 6: /* 5.1 */
-                        wfmt.dwChannelMask = SPEAKER_FRONT_LEFT | SPEAKER_FRONT_RIGHT | SPEAKER_FRONT_CENTER | SPEAKER_LOW_FREQUENCY | SPEAKER_BACK_LEFT | SPEAKER_BACK_RIGHT;
-                        break;
-                    case 7: /* 6.1 */
-                        wfmt.dwChannelMask = SPEAKER_FRONT_LEFT | SPEAKER_FRONT_RIGHT | SPEAKER_FRONT_CENTER | SPEAKER_LOW_FREQUENCY | SPEAKER_BACK_LEFT | SPEAKER_BACK_RIGHT | SPEAKER_BACK_CENTER;
-                        break;
-                    case 8: /* 7.1 */
-                        wfmt.dwChannelMask = SPEAKER_FRONT_LEFT | SPEAKER_FRONT_RIGHT | SPEAKER_FRONT_CENTER | SPEAKER_LOW_FREQUENCY | SPEAKER_BACK_LEFT | SPEAKER_BACK_RIGHT | SPEAKER_SIDE_LEFT | SPEAKER_SIDE_RIGHT;
-                        break;
-                    default:
-                        SDL_assert(0 && "Unsupported channel count!");
-                        break;
-                    }
-                } else if (SDL_AUDIO_ISFLOAT(this->spec.format)) {
-                    wfmt.Format.wFormatTag = WAVE_FORMAT_IEEE_FLOAT;
+                if (SDL_AUDIO_ISFLOAT(this->spec.format)) {
+                    wfmt.wFormatTag = WAVE_FORMAT_IEEE_FLOAT;
                 } else {
-                    wfmt.Format.wFormatTag = WAVE_FORMAT_PCM;
+                    wfmt.wFormatTag = WAVE_FORMAT_PCM;
                 }
 
-                wfmt.Format.wBitsPerSample = SDL_AUDIO_BITSIZE(this->spec.format);
-                wfmt.Format.nChannels = this->spec.channels;
-                wfmt.Format.nSamplesPerSec = this->spec.freq;
-                wfmt.Format.nBlockAlign = wfmt.Format.nChannels * (wfmt.Format.wBitsPerSample / 8);
-                wfmt.Format.nAvgBytesPerSec = wfmt.Format.nSamplesPerSec * wfmt.Format.nBlockAlign;
+                wfmt.wBitsPerSample = SDL_AUDIO_BITSIZE(this->spec.format);
+                wfmt.nChannels = this->spec.channels;
+                wfmt.nSamplesPerSec = this->spec.freq;
+                wfmt.nBlockAlign = wfmt.nChannels * (wfmt.wBitsPerSample / 8);
+                wfmt.nAvgBytesPerSec = wfmt.nSamplesPerSec * wfmt.nBlockAlign;
 
-                rc = iscapture ? CreateCaptureBuffer(this, bufsize, (WAVEFORMATEX *)&wfmt) : CreateSecondary(this, bufsize, (WAVEFORMATEX *)&wfmt);
+                rc = iscapture ? CreateCaptureBuffer(this, bufsize, &wfmt) : CreateSecondary(this, bufsize, &wfmt);
                 if (rc == 0) {
                     this->hidden->num_buffers = numchunks;
-                    break;
+                    valid_format = SDL_TRUE;
                 }
             }
-            continue;
-        default:
-            continue;
+            break;
         }
-        break;
+        test_format = SDL_NextAudioFormat();
     }
 
-    if (!test_format) {
+    if (!valid_format) {
         if (tried_format) {
-            return -1; /* CreateSecondary() should have called SDL_SetError(). */
+            return -1;  /* CreateSecondary() should have called SDL_SetError(). */
         }
-        return SDL_SetError("%s: Unsupported audio format", "directsound");
+        return SDL_SetError("DirectSound: Unsupported audio format");
     }
 
     /* Playback buffers will auto-start playing in DSOUND_WaitDevice() */
 
-    return 0; /* good to go. */
+    return 0;                   /* good to go. */
 }
 
-static void DSOUND_Deinitialize(void)
+
+static void
+DSOUND_Deinitialize(void)
 {
-#if HAVE_MMDEVICEAPI_H
-    if (SupportsIMMDevice) {
-        SDL_IMMDevice_Quit();
-        SupportsIMMDevice = SDL_FALSE;
-    }
-#endif /* HAVE_MMDEVICEAPI_H */
     DSOUND_Unload();
 }
 
-static SDL_bool DSOUND_Init(SDL_AudioDriverImpl *impl)
+
+static int
+DSOUND_Init(SDL_AudioDriverImpl * impl)
 {
     if (!DSOUND_Load()) {
-        return SDL_FALSE;
+        return 0;
     }
-
-#if HAVE_MMDEVICEAPI_H
-    SupportsIMMDevice = !(SDL_IMMDevice_Init() < 0);
-#endif /* HAVE_MMDEVICEAPI_H */
 
     /* Set the function pointers */
     impl->DetectDevices = DSOUND_DetectDevices;
@@ -642,16 +589,14 @@ static SDL_bool DSOUND_Init(SDL_AudioDriverImpl *impl)
     impl->CloseDevice = DSOUND_CloseDevice;
     impl->FreeDeviceHandle = DSOUND_FreeDeviceHandle;
     impl->Deinitialize = DSOUND_Deinitialize;
-    impl->GetDefaultAudioInfo = DSOUND_GetDefaultAudioInfo;
 
     impl->HasCaptureSupport = SDL_TRUE;
-    impl->SupportsNonPow2Samples = SDL_TRUE;
 
-    return SDL_TRUE; /* this audio target is available. */
+    return 1;   /* this audio target is available. */
 }
 
 AudioBootStrap DSOUND_bootstrap = {
-    "directsound", "DirectSound", DSOUND_Init, SDL_FALSE
+    "directsound", "DirectSound", DSOUND_Init, 0
 };
 
 #endif /* SDL_AUDIO_DRIVER_DSOUND */

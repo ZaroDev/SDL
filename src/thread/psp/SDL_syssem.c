@@ -1,6 +1,6 @@
 /*
   Simple DirectMedia Layer
-  Copyright (C) 1997-2023 Sam Lantinga <slouken@libsdl.org>
+  Copyright (C) 1997-2018 Sam Lantinga <slouken@libsdl.org>
 
   This software is provided 'as-is', without any express or implied
   warranty.  In no event will the authors be held liable for any damages
@@ -33,23 +33,23 @@
 #include <pspthreadman.h>
 #include <pspkerror.h>
 
-struct SDL_semaphore
-{
-    SceUID semid;
+struct SDL_semaphore {
+    SceUID  semid;
 };
+
 
 /* Create a semaphore */
 SDL_sem *SDL_CreateSemaphore(Uint32 initial_value)
 {
     SDL_sem *sem;
 
-    sem = (SDL_sem *)SDL_malloc(sizeof(*sem));
+    sem = (SDL_sem *) malloc(sizeof(*sem));
     if (sem != NULL) {
         /* TODO: Figure out the limit on the maximum value. */
         sem->semid = sceKernelCreateSema("SDL sema", 0, initial_value, 255, NULL);
         if (sem->semid < 0) {
             SDL_SetError("Couldn't create semaphore");
-            SDL_free(sem);
+            free(sem);
             sem = NULL;
         }
     } else {
@@ -68,7 +68,7 @@ void SDL_DestroySemaphore(SDL_sem *sem)
             sem->semid = 0;
         }
 
-        SDL_free(sem);
+        free(sem);
     }
 }
 
@@ -82,7 +82,8 @@ int SDL_SemWaitTimeout(SDL_sem *sem, Uint32 timeout)
     int res;
 
     if (sem == NULL) {
-        return SDL_InvalidParamError("sem");
+        SDL_SetError("Passed a NULL sem");
+        return 0;
     }
 
     if (timeout == 0) {
@@ -96,18 +97,18 @@ int SDL_SemWaitTimeout(SDL_sem *sem, Uint32 timeout)
     if (timeout == SDL_MUTEX_MAXWAIT) {
         pTimeout = NULL;
     } else {
-        timeout *= 1000; /* Convert to microseconds. */
+        timeout *= 1000;  /* Convert to microseconds. */
         pTimeout = &timeout;
     }
 
-    res = sceKernelWaitSema(sem->semid, 1, (SceUInt *)pTimeout);
-    switch (res) {
-    case SCE_KERNEL_ERROR_OK:
-        return 0;
-    case SCE_KERNEL_ERROR_WAIT_TIMEOUT:
-        return SDL_MUTEX_TIMEDOUT;
-    default:
-        return SDL_SetError("sceKernelWaitSema() failed");
+    res = sceKernelWaitSema(sem->semid, 1, pTimeout);
+       switch (res) {
+               case SCE_KERNEL_ERROR_OK:
+                       return 0;
+               case SCE_KERNEL_ERROR_WAIT_TIMEOUT:
+                       return SDL_MUTEX_TIMEDOUT;
+               default:
+                       return SDL_SetError("sceKernelWaitSema() failed");
     }
 }
 
@@ -127,7 +128,7 @@ Uint32 SDL_SemValue(SDL_sem *sem)
     SceKernelSemaInfo info;
 
     if (sem == NULL) {
-        SDL_InvalidParamError("sem");
+        SDL_SetError("Passed a NULL sem");
         return 0;
     }
 
@@ -143,7 +144,7 @@ int SDL_SemPost(SDL_sem *sem)
     int res;
 
     if (sem == NULL) {
-        return SDL_InvalidParamError("sem");
+        return SDL_SetError("Passed a NULL sem");
     }
 
     res = sceKernelSignalSema(sem->semid, 1);

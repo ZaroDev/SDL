@@ -1,6 +1,6 @@
 /*
   Simple DirectMedia Layer
-  Copyright (C) 1997-2023 Sam Lantinga <slouken@libsdl.org>
+  Copyright (C) 1997-2018 Sam Lantinga <slouken@libsdl.org>
 
   This software is provided 'as-is', without any express or implied
   warranty.  In no event will the authors be held liable for any damages
@@ -86,7 +86,8 @@ static struct
 
 #undef SDL_ARTS_SYM
 
-static void UnloadARTSLibrary()
+static void
+UnloadARTSLibrary()
 {
     if (arts_handle != NULL) {
         SDL_UnloadObject(arts_handle);
@@ -94,7 +95,8 @@ static void UnloadARTSLibrary()
     }
 }
 
-static int LoadARTSLibrary(void)
+static int
+LoadARTSLibrary(void)
 {
     int i, retval = -1;
 
@@ -119,12 +121,14 @@ static int LoadARTSLibrary(void)
 
 #else
 
-static void UnloadARTSLibrary()
+static void
+UnloadARTSLibrary()
 {
     return;
 }
 
-static int LoadARTSLibrary(void)
+static int
+LoadARTSLibrary(void)
 {
     return 0;
 }
@@ -132,7 +136,8 @@ static int LoadARTSLibrary(void)
 #endif /* SDL_AUDIO_DRIVER_ARTS_DYNAMIC */
 
 /* This function waits until it is possible to write a full sound buffer */
-static void ARTS_WaitDevice(_THIS)
+static void
+ARTS_WaitDevice(_THIS)
 {
     Sint32 ticks;
 
@@ -158,7 +163,8 @@ static void ARTS_WaitDevice(_THIS)
     }
 }
 
-static void ARTS_PlayDevice(_THIS)
+static void
+ARTS_PlayDevice(_THIS)
 {
     /* Write the audio data */
     int written = SDL_NAME(arts_write) (this->hidden->stream,
@@ -179,13 +185,15 @@ static void ARTS_PlayDevice(_THIS)
 #endif
 }
 
-static Uint8 *ARTS_GetDeviceBuf(_THIS)
+static Uint8 *
+ARTS_GetDeviceBuf(_THIS)
 {
     return (this->hidden->mixbuf);
 }
 
 
-static void ARTS_CloseDevice(_THIS)
+static void
+ARTS_CloseDevice(_THIS)
 {
     if (this->hidden->stream) {
         SDL_NAME(arts_close_stream) (this->hidden->stream);
@@ -195,7 +203,8 @@ static void ARTS_CloseDevice(_THIS)
     SDL_free(this->hidden);
 }
 
-static int ARTS_Suspend(void)
+static int
+ARTS_Suspend(void)
 {
     const Uint32 abortms = SDL_GetTicks() + 3000; /* give up after 3 secs */
     while ( (!SDL_NAME(arts_suspended)()) && !SDL_TICKS_PASSED(SDL_GetTicks(), abortms) ) {
@@ -206,38 +215,48 @@ static int ARTS_Suspend(void)
     return SDL_NAME(arts_suspended)();
 }
 
-static int ARTS_OpenDevice(_THIS, const char *devname)
+static int
+ARTS_OpenDevice(_THIS, void *handle, const char *devname, int iscapture)
 {
     int rc = 0;
-    int bits, frag_spec = 0;
-    SDL_AudioFormat test_format = 0;
+    int bits = 0, frag_spec = 0;
+    SDL_AudioFormat test_format = 0, format = 0;
 
     /* Initialize all variables that we clean on shutdown */
-    this->hidden = (struct SDL_PrivateAudioData *)SDL_malloc(sizeof(*this->hidden));
+    this->hidden = (struct SDL_PrivateAudioData *)
+        SDL_malloc((sizeof *this->hidden));
     if (this->hidden == NULL) {
         return SDL_OutOfMemory();
     }
     SDL_zerop(this->hidden);
 
     /* Try for a closest match on audio format */
-    for (test_format = SDL_FirstAudioFormat(this->spec.format); test_format; test_format = SDL_NextAudioFormat()) {
+    for (test_format = SDL_FirstAudioFormat(this->spec.format);
+         !format && test_format;) {
 #ifdef DEBUG_AUDIO
         fprintf(stderr, "Trying format 0x%4.4x\n", test_format);
 #endif
         switch (test_format) {
         case AUDIO_U8:
+            bits = 8;
+            format = 1;
+            break;
         case AUDIO_S16LSB:
+            bits = 16;
+            format = 1;
             break;
         default:
-            continue;
+            format = 0;
+            break;
         }
-        break;
+        if (!format) {
+            test_format = SDL_NextAudioFormat();
+        }
     }
-    if (!test_format) {
-        return SDL_SetError("%s: Unsupported audio format", "arts");
+    if (format == 0) {
+        return SDL_SetError("Couldn't find any hardware audio formats");
     }
     this->spec.format = test_format;
-    bits = SDL_AUDIO_BITSIZE(test_format);
 
     if ((rc = SDL_NAME(arts_init) ()) != 0) {
         return SDL_SetError("Unable to initialize ARTS: %s",
@@ -294,21 +313,23 @@ static int ARTS_OpenDevice(_THIS, const char *devname)
 }
 
 
-static void ARTS_Deinitialize(void)
+static void
+ARTS_Deinitialize(void)
 {
     UnloadARTSLibrary();
 }
 
 
-static SDL_bool ARTS_Init(SDL_AudioDriverImpl * impl)
+static int
+ARTS_Init(SDL_AudioDriverImpl * impl)
 {
     if (LoadARTSLibrary() < 0) {
-        return SDL_FALSE;
+        return 0;
     } else {
-        if (SDL_NAME(arts_init) () != NULL) {
+        if (SDL_NAME(arts_init) () != 0) {
             UnloadARTSLibrary();
             SDL_SetError("ARTS: arts_init failed (no audio server?)");
-            return SDL_FALSE;
+            return 0;
         }
 
         /* Play a stream so aRts doesn't crash */
@@ -329,14 +350,14 @@ static SDL_bool ARTS_Init(SDL_AudioDriverImpl * impl)
     impl->GetDeviceBuf = ARTS_GetDeviceBuf;
     impl->CloseDevice = ARTS_CloseDevice;
     impl->Deinitialize = ARTS_Deinitialize;
-    impl->OnlyHasDefaultOutputDevice = SDL_TRUE;
+    impl->OnlyHasDefaultOutputDevice = 1;
 
-    return SDL_TRUE;   /* this audio target is available. */
+    return 1;   /* this audio target is available. */
 }
 
 
 AudioBootStrap ARTS_bootstrap = {
-    "arts", "Analog RealTime Synthesizer", ARTS_Init, SDL_FALSE
+    "arts", "Analog RealTime Synthesizer", ARTS_Init, 0
 };
 
 #endif /* SDL_AUDIO_DRIVER_ARTS */

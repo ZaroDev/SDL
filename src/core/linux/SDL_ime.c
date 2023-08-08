@@ -1,6 +1,6 @@
 /*
   Simple DirectMedia Layer
-  Copyright (C) 1997-2023 Sam Lantinga <slouken@libsdl.org>
+  Copyright (C) 1997-2018 Sam Lantinga <slouken@libsdl.org>
 
   This software is provided 'as-is', without any express or implied
   warranty.  In no event will the authors be held liable for any damages
@@ -18,19 +18,18 @@
      misrepresented as being the original software.
   3. This notice may not be removed or altered from any source distribution.
 */
-#include "../../SDL_internal.h"
 
 #include "SDL_ime.h"
 #include "SDL_ibus.h"
 #include "SDL_fcitx.h"
 
-typedef SDL_bool (*_SDL_IME_Init)(void);
-typedef void (*_SDL_IME_Quit)(void);
+typedef SDL_bool (*_SDL_IME_Init)();
+typedef void (*_SDL_IME_Quit)();
 typedef void (*_SDL_IME_SetFocus)(SDL_bool);
-typedef void (*_SDL_IME_Reset)(void);
-typedef SDL_bool (*_SDL_IME_ProcessKeyEvent)(Uint32, Uint32, Uint8 state);
-typedef void (*_SDL_IME_UpdateTextRect)(const SDL_Rect *);
-typedef void (*_SDL_IME_PumpEvents)(void);
+typedef void (*_SDL_IME_Reset)();
+typedef SDL_bool (*_SDL_IME_ProcessKeyEvent)(Uint32, Uint32);
+typedef void (*_SDL_IME_UpdateTextRect)(SDL_Rect *);
+typedef void (*_SDL_IME_PumpEvents)();
 
 static _SDL_IME_Init SDL_IME_Init_Real = NULL;
 static _SDL_IME_Quit SDL_IME_Quit_Real = NULL;
@@ -40,25 +39,25 @@ static _SDL_IME_ProcessKeyEvent SDL_IME_ProcessKeyEvent_Real = NULL;
 static _SDL_IME_UpdateTextRect SDL_IME_UpdateTextRect_Real = NULL;
 static _SDL_IME_PumpEvents SDL_IME_PumpEvents_Real = NULL;
 
-static void InitIME()
+static void
+InitIME()
 {
     static SDL_bool inited = SDL_FALSE;
-#ifdef HAVE_FCITX
+#ifdef HAVE_FCITX_FRONTEND_H
     const char *im_module = SDL_getenv("SDL_IM_MODULE");
     const char *xmodifiers = SDL_getenv("XMODIFIERS");
 #endif
 
-    if (inited == SDL_TRUE) {
+    if (inited == SDL_TRUE)
         return;
-    }
 
     inited = SDL_TRUE;
 
     /* See if fcitx IME support is being requested */
-#ifdef HAVE_FCITX
-    if (SDL_IME_Init_Real == NULL &&
+#ifdef HAVE_FCITX_FRONTEND_H
+    if (!SDL_IME_Init_Real &&
         ((im_module && SDL_strcmp(im_module, "fcitx") == 0) ||
-         (im_module == NULL && xmodifiers && SDL_strstr(xmodifiers, "@im=fcitx") != NULL))) {
+         (!im_module && xmodifiers && SDL_strstr(xmodifiers, "@im=fcitx") != NULL))) {
         SDL_IME_Init_Real = SDL_Fcitx_Init;
         SDL_IME_Quit_Real = SDL_Fcitx_Quit;
         SDL_IME_SetFocus_Real = SDL_Fcitx_SetFocus;
@@ -67,11 +66,11 @@ static void InitIME()
         SDL_IME_UpdateTextRect_Real = SDL_Fcitx_UpdateTextRect;
         SDL_IME_PumpEvents_Real = SDL_Fcitx_PumpEvents;
     }
-#endif /* HAVE_FCITX */
+#endif /* HAVE_FCITX_FRONTEND_H */
 
     /* default to IBus */
 #ifdef HAVE_IBUS_IBUS_H
-    if (SDL_IME_Init_Real == NULL) {
+    if (!SDL_IME_Init_Real) {
         SDL_IME_Init_Real = SDL_IBus_Init;
         SDL_IME_Quit_Real = SDL_IBus_Quit;
         SDL_IME_SetFocus_Real = SDL_IBus_SetFocus;
@@ -83,7 +82,8 @@ static void InitIME()
 #endif /* HAVE_IBUS_IBUS_H */
 }
 
-SDL_bool SDL_IME_Init(void)
+SDL_bool
+SDL_IME_Init(void)
 {
     InitIME();
 
@@ -105,48 +105,48 @@ SDL_bool SDL_IME_Init(void)
     return SDL_FALSE;
 }
 
-void SDL_IME_Quit(void)
+void
+SDL_IME_Quit(void)
 {
-    if (SDL_IME_Quit_Real) {
+    if (SDL_IME_Quit_Real)
         SDL_IME_Quit_Real();
-    }
 }
 
-void SDL_IME_SetFocus(SDL_bool focused)
+void
+SDL_IME_SetFocus(SDL_bool focused)
 {
-    if (SDL_IME_SetFocus_Real) {
+    if (SDL_IME_SetFocus_Real)
         SDL_IME_SetFocus_Real(focused);
-    }
 }
 
-void SDL_IME_Reset(void)
+void
+SDL_IME_Reset(void)
 {
-    if (SDL_IME_Reset_Real) {
+    if (SDL_IME_Reset_Real)
         SDL_IME_Reset_Real();
-    }
 }
 
-SDL_bool SDL_IME_ProcessKeyEvent(Uint32 keysym, Uint32 keycode, Uint8 state)
+SDL_bool
+SDL_IME_ProcessKeyEvent(Uint32 keysym, Uint32 keycode)
 {
-    if (SDL_IME_ProcessKeyEvent_Real) {
-        return SDL_IME_ProcessKeyEvent_Real(keysym, keycode, state);
-    }
+    if (SDL_IME_ProcessKeyEvent_Real)
+        return SDL_IME_ProcessKeyEvent_Real(keysym, keycode);
 
     return SDL_FALSE;
 }
 
-void SDL_IME_UpdateTextRect(const SDL_Rect *rect)
+void
+SDL_IME_UpdateTextRect(SDL_Rect *rect)
 {
-    if (SDL_IME_UpdateTextRect_Real) {
+    if (SDL_IME_UpdateTextRect_Real)
         SDL_IME_UpdateTextRect_Real(rect);
-    }
 }
 
-void SDL_IME_PumpEvents()
+void
+SDL_IME_PumpEvents()
 {
-    if (SDL_IME_PumpEvents_Real) {
+    if (SDL_IME_PumpEvents_Real)
         SDL_IME_PumpEvents_Real();
-    }
 }
 
 /* vi: set ts=4 sw=4 expandtab: */
