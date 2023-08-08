@@ -77,6 +77,7 @@ intrinsics "Off"
 filter "system:windows"
 systemversion "latest"
 defines {"_WINDOWS"}
+postbuildcommands {"{COPY} \"%{cfg.buildtarget.relpath}\" \"%{wks.location}Output\""}
 
 filter "configurations:Debug"
 defines {"_DEBUG"}
